@@ -1,0 +1,43 @@
+{
+  "name": "kotodama-a1r0ps01",
+  "main": "svelte/.svelte-kit/cloudflare/_worker.js",
+  "compatibility_date": "2025-03-17",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "nodejs_als"
+  ],
+  "vars": {
+    "APP_CAPABILITIES": "[\"fileFlightPlan\",\"createDispatchBrief\",\"fetchNotam\"]",
+    "APP_DESCRIPTION": "air-ops — airline flight operations and dispatch. Handles flight plan filing, dispatch briefs, NOTAMs, weather briefings, technical logs, fuel orders, PIREPs, and real-time flight monitoring.",
+    "APP_DISPLAY_NAME": "Air Flight Operations",
+    "APP_FRAMEWORK": "sveltekit-edge-bff",
+    "APP_NANOID": "a1r0ps01",
+    "APP_PERFORMER_TYPE": "service",
+    "APP_UI_TYPE": "yoro",
+    "AGENTGATEWAY_MCP_ROUTER_URL": "https://mcp.etzhayyim.com/xrpc/com.etzhayyim.mcp.message"
+  },
+  "rules": [
+    {
+      "type": "CompiledWasm",
+      "globs": [
+        "**/*.wasm"
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "pattern": "a1r0ps01.etzhayyim.com/*",
+      "zone_name": "etzhayyim.com"
+    },
+    {
+      "pattern": "air-ops.etzhayyim.com/*",
+      "zone_name": "etzhayyim.com"
+    }
+  ],
+  "assets": {
+    "directory": "./svelte/.svelte-kit/cloudflare/client",
+    "binding": "ASSETS",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "none"
+  }
+}

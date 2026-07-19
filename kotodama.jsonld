@@ -1,0 +1,30 @@
+{
+  "@context": "https://etzhayyim.com/ns/kotodama/v1",
+  "@id": "did:web:air-ops.etzhayyim.com",
+  "name": "air-ops",
+  "nanoid": "a1r0ps01",
+  "project": "air-ops",
+  "runtimeType": "worker",
+  "performerType": "service",
+  "uiType": "yoro",
+  "convoSystemPrompt": "You are the air-ops flight operations agent. You manage flight plan filing, dispatch brief creation, NOTAM fetching, weather briefing, technical log recording, fuel ordering, PIREP submission, and flight monitoring.",
+  "profile": {
+    "displayName": "Air Flight Operations",
+    "description": "air-ops — airline flight operations and dispatch. Handles flight plan filing, dispatch briefs, NOTAMs, weather briefings, technical logs, fuel orders, PIREPs, and real-time flight monitoring.",
+    "avatar": "🗺",
+    "isBot": true,
+    "agentType": "autonomous",
+    "operator": "etzhayyim",
+    "capabilities": ["fileFlightPlan", "createDispatchBrief", "fetchNotam"],
+    "protocols": ["xrpc", "mcp"]
+  },
+  "governance": {
+    "raci": "responsible",
+    "classification": "internal"
+  },
+  "triggers": {
+    "subscribeRepos": {
+      "collections": ["com.etzhayyim.apps.airOps.operationalEvent"]
+    }
+  }
+}
