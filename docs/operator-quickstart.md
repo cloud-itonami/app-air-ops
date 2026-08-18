@@ -1,453 +1,389 @@
-# Operator quickstart — app-air-ops
+# operator-quickstart — app-air-ops
 
-22 tracked files: flight plan filing, dispatch briefs, NOTAMs, tech logs, fuel orders
-and PIREPs for an airline. This is the sixth of the nine `app-air-*` siblings to get a
-quickstart, so **the family-wide scaffolding facts are not re-derived here** — they are
-in `cloud-itonami/app-air-mro/docs/operator-quickstart.md` §1–§4 and remain true of this
-repository field for field (`caps=3 hdr=8 routes=2 vars=8 pageRouteCount=0
-healthInSvelte=False todoUnchecked=7`, re-measured 2026-08-16 across all nine).
+**この repo で今日実際にできることを、踏める形で上から書く。** 所要 5 分。
+Cloudflare のアカウントは要らない（deploy だけが要る。§6）。
 
-What this one adds is the layer both `app-air-mro` §6 and `app-air-ffp` §6 recorded as
-**NOT WALKED**: `kotoba/`, the only part of the tree that contains domain logic. It is
-walked here. The suite is green, **nine of ten mutants die and one survives**, and two
-defects show up that no test covers.
+出力はすべて 2026-08-18 に実際に walk した結果である。**飛ばしたステップは
+合格したステップではない** —— §7 が walk しなかったものを書く。
 
-Steps marked ✅ were run on 2026-08-16 against `e0be46d`. §9 says what was not walked;
-a step that was skipped is not a step that passed.
+`kotoba/` の walk（mutation testing・鍵衝突・暗号化パスの欠陥）は
+**この文書ではなく `docs/kotoba-layer-audit.md`** にある。移行はあの層に触って
+いないので、あちらの測定はいまも成り立つ。
 
----
+## 0. 前提
 
-## §0 Four things that will waste your time
+| 要るもの | 確認 | この walk で使った版 |
+|---|---|---|
+| git | `git --version` | 2.51.0 |
+| node | `node --version` | v26.3.0 |
+| nbb | `npx --yes nbb --version` | v1.4.210 |
+| clojure | `clojure --version` | ビルド時のみ（shadow-cljs が呼ぶ） |
 
-`cloud-itonami/app-air-crew/docs/operator-quickstart.md` §0 documents these at length.
-Short form, so you need not open it first:
+**west checkout で作業するなら remote は `origin` ではない。** west は remote を
+org 名で作るので `cloud-itonami` である（`git fetch origin` は access-rights
+エラーになる。repo が無いのではない）。`error: could not read IPC response` が
+stderr に出るのは fsmonitor daemon で、コマンド自体は成功している ——
+`-c core.fsmonitor=false` で黙る。
 
-1. **the remote is not `origin`** — west names remotes after the org, so it is
-   `cloud-itonami`. `git fetch origin` fails with an access-rights error and
-   `origin/main` does not resolve.
-2. **`error: could not read IPC response` on stderr is the fsmonitor daemon**, not your
-   command; it still succeeded. `-c core.fsmonitor=false` silences it.
-3. **`npm install` in `kotoba/` fails** with `EALLOWSCRIPTS` — §2 gets around it.
-4. **there is no `.gitignore`** — building in the checkout leaves `node_modules/` and
-   `.svelte-kit/` untracked. Everything below builds in `/tmp/ops-build`, a copy, and
-   never in the checkout.
+## 1. 取得して、書いてあることが本当か検査する
 
 ```bash
-REPO=~/github/com-junkawasaki/orgs/cloud-itonami/app-air-ops
-rm -rf /tmp/ops-build && cp -R "$REPO" /tmp/ops-build && rm -rf /tmp/ops-build/.git
+git clone git@github.com:cloud-itonami/app-air-ops.git
+cd app-air-ops
+REPO=$PWD
+npx --yes nbb scripts/verify-docs-claims.cljs .
 ```
 
-## §1 ✅ Provenance — is this really a verbatim copy?
+実際の出力:
 
-`migration.edn` claims an exact extraction:
-
-```clojure
-:source {:repository "etzhayyim/root"
-         :revision "0c30514ab1ac7f929b1c796f2d03594117fae2d7"
-         :path "60-apps/etzhayyim-project-air-ops"
-         :tree "16e1d154dbed944665f9a28de3123b7ac441c237"
-         :tracked-files 20 :bytes 56970}
-:identity {:allowed-additions ["README.edn" "migration.edn"]}
+```
+SCANNED	26
+PASS	tracked-files	expected=26	actual=26
+PASS	inherited-bytes	expected=45457	actual=45457
+PASS	preserved-files-unchanged	expected=[]	actual=[]
+PASS	removed-by-migration-absent	expected=[]	actual=[]
+PASS	svelte-artifacts	expected=0	actual=0
+PASS	appview-ts-files	expected=0	actual=0
+PASS	kotoba-files	expected=7	actual=7
+PASS	kotoba-ts-files	expected=5	actual=5
+PASS	production-canonical-files	expected=4	actual=4
+PASS	wrangler-main	expected="dist/worker.js"	actual="dist/worker.js"
+PASS	declared-vars	expected=8	actual=8
+PASS	declared-routes	expected=2	actual=2
+PASS	app-framework	expected="cljs-esm-worker"	actual="cljs-esm-worker"
+PASS	no-stale-assets-binding	expected=true	actual=true
+PASS	sveltekit-compat-flags	expected=0	actual=0
+PASS	shadow-builds-that-main	expected=true	actual=true
+PASS	warnings-as-errors-in-compiler-options	expected=true	actual=true
+PASS	page-renders-route-table	expected=true	actual=true
+OK	every claim in README.md and docs/ holds
 ```
 
-`etzhayyim/root` is public, so compare **git blob SHAs** — no file contents need to be
-downloaded, and a blob SHA covers every byte:
+末尾が `OK` なら README の数値・存在・不在は tree と一致している。
+**exit 2（UNDETERMINED）は 0 ではない** —— tree を読み切れなかったという別の
+答えで、「検査して問題なし」と混ぜない。
+
+この検査には移行の不変条件が入っている: appview の TypeScript が戻っていない
+こと（撤去した 9 パスの不在 **と** `.ts` の総数の両方）、`kotoba/` が増減して
+いないこと（**残すと決めた層なので、消えていないことも検査する**）、
+`wrangler.jsonc` の `main` が shadow の出力先を指していること、
+`:warnings-as-errors` が `:compiler-options` に在ること、そしてページが route 表
+から描かれていること。
+
+### 落ちることを確かめた（6 通り）
+
+緑は、それが赤くなるところを見るまで検査ではない。
+
+| 壊したもの | 赤くなった claim |
+|---|---|
+| `:warnings-as-errors` を `:build-options` へ移す | `warnings-as-errors-in-compiler-options` |
+| `src/app.ts` を元のパスに戻す | `removed-by-migration-absent` + `appview-ts-files` + `tracked-files` |
+| **別名**の `.ts`（`src/sneaky.ts`）を足す | `appview-ts-files` + `tracked-files` |
+| `kotoba/` にファイルを 1 つ足す | `kotoba-files` + `kotoba-ts-files` + `tracked-files` |
+| `wrangler` の `main` を SvelteKit 出力に戻す | `wrangler-main` + `shadow-builds-that-main` |
+| `kotoba/src/types.ts` に改行 1 つ足す | `preserved-files-unchanged` + `inherited-bytes` |
+
+`:warnings-as-errors` の置き場所は **EDN を読んで**確かめている。grep では駄目
+である —— `shadow-cljs.edn` のコメントにも検証器自身のコメントにもその文字列が
+入っているので、grep は必ず当たる（**落ちようのない検査**になる）。
+
+## 2. テストを走らせる（ビルド不要・ブラウザ不要）
+
+判断（`route.cljc`）と描画（`view.cljc`）は純 `.cljc` なので、nbb だけで回る。
+
+```bash
+K=~/github/com-junkawasaki/orgs/kotoba-lang
+CP="src:test:$K/jp-go-digital-design-system/src:$K/html/src:$K/css/src"
+cat > /tmp/run.cljs <<'EOF'
+(require '[cljs.test :refer [run-tests]] 'airops.route-test)
+(run-tests 'airops.route-test)
+EOF
+npx --yes nbb --classpath "$CP" /tmp/run.cljs
+```
+
+実際の出力:
+
+```
+Testing airops.route-test
+
+Ran 6 tests containing 28 assertions.
+0 failures, 0 errors.
+```
+
+何を固定しているか: `/xrpc/` は**空の nsid だけ** 400 にする（`/xrpc/a/b` も
+prefix 無しの NSID も、移行前の rest parameter `[...path]` と同じく転送する ——
+絞るのは移行ではなく方針変更）、MCP router の URL 解決（空白だけの設定は未設定
+として扱う）、`result` / `structuredContent` の剥がし方、**ページが route 表から
+描かれること**（固定値を焼いていたら落ちる）、そして
+**env の値がページに出ないこと**。
+
+### 落ちることを確かめた（3 通り）
+
+| 壊したもの | 赤くなったテスト |
+|---|---|
+| `env-var-keys` が keys でなく **vals** を返す | `env-var-keys-drops-values`（3 assertion） |
+| `/xrpc/a/b` を 1 セグメントに絞る | `dispatch-xrpc` |
+| ページが route 表でなく空リストを描く | `page-shows-the-real-routes`（2 assertion） |
+
+**値の露出は `view` ではなく `route/env-var-keys` で検査している。** view は元から
+値を受け取らないので、view に sentinel を当てる検査は**構造的に落ちない** ——
+書きかけて気づいたので、判断を `.cljc` に出した。
+
+## 3. ページを描画して採点する
+
+```bash
+K=~/github/com-junkawasaki/orgs/kotoba-lang
+CP="src:$K/jp-go-digital-design-system/src:$K/html/src:$K/css/src"
+cat > /tmp/render.cljs <<'EOF'
+(require '["node:fs" :as fs] '[airops.view :as view] '[airops.route :as route])
+(let [css (.readFileSync fs (str (.-DDS js/process.env) "/resources/jp_go_dds/dds.css") "utf8")]
+  (.writeFileSync fs "/tmp/airops-page.html"
+    (view/render {:css css :routes route/routes
+                  :vars [:AGENTGATEWAY_MCP_ROUTER_URL :APP_CAPABILITIES :APP_DESCRIPTION
+                         :APP_DISPLAY_NAME :APP_FRAMEWORK :APP_NANOID
+                         :APP_PERFORMER_TYPE :APP_UI_TYPE]
+                  :mcp-url "https://mcp.etzhayyim.com/xrpc/com.etzhayyim.mcp.message"}))
+  (println "wrote /tmp/airops-page.html"))
+EOF
+DDS="$K/jp-go-digital-design-system" npx --yes nbb --classpath "$CP" /tmp/render.cljs
+
+cd $K/design-quality && npx --yes nbb -m design-quality.cli score /tmp/airops-page.html --min 95
+```
+
+実際の出力:
+
+```
+  100.00  /tmp/airops-page.html
+aggregate: 100.00
+
+axes scored: 10 (viewport, safe-area, dynamic-viewport, tap-targets, focus-visible,
+                 reduced-motion, overflow-guard, color-scheme, responsive, semantics)
+NOT scored: input-zoom, contrast — pass --extra-axes to include the optional ones
+A pass says nothing about an axis that was not applied.
+gate: aggregate 100.00 >= min 95.00 -> PASS
+```
+
+`--extra-axes` を付けた 12 軸でも `100.00` / PASS。
+
+### この 100.00 が保証しないもの（実測）
+
+**デザインシステムを完全に外しても、この gate は通る。** 同じページを `:css ""`
+で描き直して同じ CLI に掛けた:
+
+```
+  96.63  /tmp/airops-page-nocss.html
+gate: aggregate 96.63 >= min 95.00 -> PASS
+```
+
+CSS が 1 バイトも無いページが 96.63 で **PASS** する。CLI 自身が出力に
+`A pass says nothing about an axis that was not applied.` と書いている。
+「CSS が実際に入っている」と言えるのは §5 の smoke の 2 本目だけである。
+
+## 4. bundle をビルドする
+
+**高負荷ビルドは同時 1 本に制限されている**（superproject `CLAUDE.md` の
+resource governor）。直接叩かず、必ず guard 経由で:
 
 ```bash
 cd "$REPO"
-gh api "repos/etzhayyim/root/git/trees/16e1d154dbed944665f9a28de3123b7ac441c237?recursive=1" \
-  --jq '.tree[] | select(.type=="blob") | .path + " " + .sha' | sort > /tmp/ops-upstream-blobs.txt
-git -c core.fsmonitor=false ls-files -s | grep -v -E '(README|migration)\.edn$' \
-  | awk '{print $4" "$2}' | sort > /tmp/ops-local-blobs.txt
-diff /tmp/ops-upstream-blobs.txt /tmp/ops-local-blobs.txt && echo "20/20 identical"
+node ~/github/com-junkawasaki/scripts/resource-guard.mjs run build -- \
+  npx --yes shadow-cljs release worker
+ls -la dist/worker.js
 ```
 
-Result: **20 upstream blobs, 20 local blobs, zero differences.** The two additions are
-exactly the two declared. The byte count agrees independently:
+lock を他セッションが持っていると **exit 2** で拒否される。**迂回しない** ——
+`resource-guard: build is already running (pid=…)` はエラーではなく順番待ちで
+ある（この walk では 1 回目が待ちに入り、2 回目で通った）。
+
+実際の出力（末尾）:
+
+```
+[:worker] Build completed. (55 files, 12 compiled, 0 warnings, 31.47s)
+-rw-r--r--  1 junkawasaki  wheel  245878  8月 18 21:36 dist/worker.js
+```
+
+### 壊れた var はビルドを **落とす**（2026-08-18 実測）
+
+`shadow-cljs.edn` の `:compiler-options` に `:warnings-as-errors true` を入れた。
+入れる前は、存在しない var を参照しても shadow は **WARNING** を出して **exit 0**
+し、最初のリクエストで `Cannot read properties of undefined` を投げる bundle を
+書いていた ——「ビルドが通った」は検査ではなかった（**落ちようがなかった**）。
+
+この repo で実際に落として確かめた。`src/airops/worker.cljs:109` の
+`route/dispatch` を、存在しない `route/dispatch-nonexistent` に改名して再ビルド:
+
+```
+------ ERROR -------------------------------------------------------------------
+ File: /private/tmp/app-air-ops-cljs/src/airops/worker.cljs:109:44
+```
+
+| | exit | `dist/worker.js` sha256 | bytes |
+|---|---|---|---|
+| 改名前 | **0** | `1d064bc7ede21ebb…` | 245878 |
+| 改名後 | **1** | `1d064bc7ede21ebb…`（**不変**） | 245878 |
+| 戻して再ビルド | **0** | `1d064bc7ede21ebb…` | 245878 |
+
+**落ちたビルドは bundle を出荷しない** —— sha256 が 1 バイトも動いていないことが
+それを言っている。戻して再ビルドすると同じ sha に戻ることも確かめた（再現する）。
+
+キーは `:build-options` ではなく **`:compiler-options`** に置く。shadow が読むのは
+`[:compiler-options :warnings-as-errors]` で、置き場所を間違えると**黙って無視される**
+—— この option が防ぐはずの失敗（落ちようのない検査）そのものになる。
+
+## 5. ビルドした成果物を実際に叩く
+
+ここが deploy されるものに触る唯一の検査である。
 
 ```bash
-git -c core.fsmonitor=false ls-files | grep -v -E '^(README|migration)\.edn$' | xargs wc -c | tail -1
-#   56970 total        ← equals :bytes in migration.edn
+cd "$REPO" && npx --yes nbb scripts/smoke-worker.cljs dist/worker.js
 ```
 
-**Confirm the check can fail**, or a clean result means nothing:
+実際の出力:
 
-```bash
-cp kotoba/src/registry.ts /tmp/drift.ts && printf '\n' >> /tmp/drift.ts
-git hash-object kotoba/src/registry.ts   # 4c7fde8ad41b344f00e9e111870e5645a560922d — matches upstream
-git hash-object /tmp/drift.ts            # 98bc0b76dc4f9ed78b273a671924bf50e278c961 — one newline moves it
+```
+PASS	default export has fetch	expected=true	actual=true
+PASS	GET / status	expected=200	actual=200
+PASS	GET / is html	expected=true	actual=true
+PASS	page advertises /health	expected=true	actual=true
+PASS	page advertises /xrpc/:nsid	expected=true	actual=true
+PASS	page shows a var key	expected=true	actual=true
+PASS	page hides other var values	expected=false	actual=false
+PASS	page shows the relay target it uses	expected=true	actual=true
+PASS	page uses the design system components	expected=true	actual=true
+PASS	page carries the stylesheet itself	expected=true	actual=true
+PASS	GET /health status	expected=200	actual=200
+PASS	health names its routes	expected=true	actual=true
+PASS	POST /xrpc/ status	expected=400	actual=400
+PASS	OPTIONS preflight	expected=204	actual=204
+PASS	unknown path	expected=404	actual=404
+PASS	wrong method	expected=405	actual=405
+OK	the built bundle answers as the route table says
 ```
 
-## §2 ✅ Run the kotoba tests
+**bundle が無ければ exit 2**（「判定できなかった」であって合格ではない）。
+実測:
 
-`kotoba/` is 980 lines (`registry.ts` 414, `types.ts` 394, `test/air-ops.test.ts` 148,
-`index.ts` 24) and holds every rule this app has. `npm install` refuses it:
-
-```bash
-cd /tmp/ops-build/kotoba && npm install
-#   npm error code EALLOWSCRIPTS
-#   npm error --allow-scripts is not allowed in project-scoped installs.
+```
+UNDETERMINED	no bundle at /private/tmp/app-air-ops-cljs/dist/worker.js
+Refusing to report a pass: build it first (see docs/operator-quickstart.md S4).
+exit=2
 ```
 
-Both dependencies are git URLs whose preparation runs a nested install that npm 11.16
-rejects. The workaround is `app-air-dcs`'s (§6 there); it rests on two facts you can
-check yourself. The real SDK is **type-only**, erased at runtime:
+### デザインシステムの検査は 2 本ある（1 本では落ちない）
 
-```bash
-grep -rn '@etzhayyim/sdk' kotoba/src kotoba/test
-#   kotoba/src/registry.ts:17:import type { Etzhayyim } from "@etzhayyim/sdk";
-#   kotoba/test/air-ops.test.ts:2:import { MockEtzhayyim } from "@etzhayyim/sdk-mock";
-```
+`dads-table` が在ることを 1 本で見る形は**落ちない検査**だった —— それは view が
+出力する markup であって、CSS が 1 バイトも入っていないページにも現れる。
+このページで実測:
 
-and the mock is standalone — its two `@etzhayyim/sdk` mentions are both in comments:
-
-```bash
-rm -rf /tmp/ops-sdk && mkdir -p /tmp/ops-sdk && cd /tmp/ops-sdk
-git clone -q https://github.com/etzhayyim/com-etzhayyim-sdk-mock.git sdk-mock
-git -C sdk-mock checkout -q c857ff9be5310bf433bfe1e8d3c0f677e213d667   # the pinned SHA
-grep -n '@etzhayyim/sdk' sdk-mock/src/index.ts   # lines 2 and 43, both comments
-```
-
-Install the mock from disk with its unused dependency removed:
-
-```bash
-node -e 'const fs=require("fs"),f="/tmp/ops-sdk/sdk-mock/package.json";
-const p=JSON.parse(fs.readFileSync(f,"utf8"));delete p.dependencies;
-fs.writeFileSync(f,JSON.stringify(p,null,2));'
-
-cd /tmp/ops-build/kotoba
-node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("package.json","utf8"));
-delete p.dependencies;
-p.devDependencies={"@etzhayyim/sdk-mock":"file:/tmp/ops-sdk/sdk-mock","typescript":"^5.6.0","vitest":"^4.1.0"};
-fs.writeFileSync("package.json",JSON.stringify(p,null,2));'
-
-npm install --ignore-scripts && npx vitest run
-#   Test Files  1 passed (1)
-#         Tests  11 passed (11)
-```
-
-## §3 ✅ Do the tests discriminate? (ten mutants, one survives)
-
-Eleven green tests prove nothing until you have watched them go red. Each mutation must
-be verified to have **applied** — a replace that silently matches nothing produces a
-red-free run indistinguishable from a surviving mutant, which is the failure this whole
-exercise exists to catch. `apply` exits non-zero before writing when its pattern is
-absent, so `run_mut` prints `NO-OP` and leaves the tree untouched. Feed it a string that
-does not occur and watch it say so before trusting any row of the table below.
-
-```bash
-cd /tmp/ops-build/kotoba
-cp src/registry.ts /tmp/ops-registry.orig.ts
-cp src/types.ts    /tmp/ops-types.orig.ts
-
-apply () { node - "$1" "$2" "$3" <<'JS'
-const fs=require('fs'); const [f,from,to]=process.argv.slice(2);
-const p='src/'+f, s=fs.readFileSync(p,'utf8');
-if(!s.includes(from)) process.exit(1);          // ← the NO-OP guard
-fs.writeFileSync(p, s.replace(from,to));
-JS
-}
-
-run_mut () {   # run_mut <name> <file> <from> <to>
-  cp /tmp/ops-registry.orig.ts src/registry.ts; cp /tmp/ops-types.orig.ts src/types.ts
-  apply "$2" "$3" "$4" || { echo "$1 -> NO-OP (pattern not found)"; return; }
-  echo "$1 -> $(npx vitest run 2>&1 | grep -E '^ +Tests +' | head -1)"
-  cp /tmp/ops-registry.orig.ts src/registry.ts; cp /tmp/ops-types.orig.ts src/types.ts
-}
-```
-
-| # | mutation | result |
+| 探す文字列 | CSS 込み | CSS 無し |
 |---|---|---|
-| M1 | `recordNotam` dedup: drop the `alreadyExists` return | **1 failed** / 10 passed |
-| M2 | `isDecimalString` always accepts | **4 failed** / 7 passed |
-| M3 | PIREP → NOTAM-location FK check always true | **1 failed** / 10 passed |
-| M4 | `fileFlightPlan` `encryptedWrite` → plaintext `write` | **3 failed** / 8 passed |
-| M5 | `recordTechLog` `encryptedWrite` → plaintext `write` | **2 failed** / 9 passed |
-| M6 | `listNotams` drops its `location` + `notamType` filters | **1 failed** / 10 passed |
-| M7 | `submitPirep` required-field check always accepts | **11 passed — SURVIVED** |
-| M8 | `isUint` always accepts | **1 failed** / 10 passed |
-| M9 | `coverage` `notamsByLocation` counts 1 instead of accumulating | **1 failed** / 10 passed |
-| M10 | `listFuelOrders` drops its `flightNo` filter | **1 failed** / 10 passed |
+| `dads-table` | 74 | **6**（0 にならない） |
+| `class="dads-table"` | 1 | **1** |
+| `--color-primitive-blue` | 45 | **0** |
+| `--hig-color-secondary-label` | 3 | **3**（app-css が markup に出すので印にならない） |
 
-Ten applied — none reported `NO-OP` — nine killed, **one alive**. Restore and confirm
-the baseline is green again, otherwise you have measured a broken tree rather than a
-killed mutant:
+**割った 2 本が実際に別々に動くことを、ビルドし直して確かめた。**
+`(rc/inline "jp_go_dds/dds.css")` を `""` に置き換えて release し直すと:
+
+```
+build exit=0            dist/worker.js 245878 → 170538 bytes
+...
+PASS	page uses the design system components	expected=true	actual=true    ← 緑のまま
+FAIL	page carries the stylesheet itself	expected=true	actual=false   ← ここだけ赤
+FAILED	1 check(s): page carries the stylesheet itself
+smoke exit=1
+```
+
+**component 検査は緑のまま、stylesheet 検査だけが赤くなる。**
+これが「1 本では落ちなかった」ことの実演であり、2 本に割った理由である。
+
+## 6. Workers ランタイム（workerd）で動かす
+
+Node で import する smoke より強い検査。実際の workerd で起こす。
 
 ```bash
-cp /tmp/ops-registry.orig.ts src/registry.ts
-cp /tmp/ops-types.orig.ts    src/types.ts
-npx vitest run          # → Tests  11 passed (11)
+cd "$REPO"
+npx --yes wrangler@latest dev --local --port 8792 --ip 127.0.0.1
+# 別シェルで
+curl -s -o /dev/null -w '%{http_code} %{content_type}\n' http://127.0.0.1:8792/
+curl -s http://127.0.0.1:8792/health
 ```
 
-## §4 ⚠ M7: the PIREP required-field check is untested, and partly hidden
+実際の出力（`compatibility_flags` を**外した**設定で）:
 
-`registry.ts:143` is the whole mutation:
-
-```diff
-- if (!input.pirepId || !input.flightNo || !input.location) return { status: "rejected", error: "missingRequiredFields" };
-+
+```
+200 text/html; charset=utf-8
+{"ok":true,"app":"air-ops","runtime":"cljs","routes":["/","/health","/xrpc/:nsid"]}
 ```
 
-`recordNotam` has a matching negative test (`notamId: ""` → `rejected`, line 33 of the
-suite); `submitPirep` has none. But the reason this hides is more interesting than a
-missing case, and it is why reading only the mutant table would mislead you.
+全 route を実際に叩いた:
 
-Delete the check and submit an empty-identifier PIREP:
+| リクエスト | 応答 |
+|---|---|
+| `GET /` | `200 text/html; charset=utf-8` |
+| `GET /health` | `200` `{"ok":true,"app":"air-ops","runtime":"cljs","routes":[…]}` |
+| `POST /xrpc/` | `400` `{"error":"Missing XRPC method"}` |
+| `POST /xrpc/com.etzhayyim.apps.airOps.fetchNotam` | `502` `{"error":"MCP router unreachable","url":"https://mcp.etzhayyim.com/…"}` |
+| `POST /xrpc/a/b`（多段） | `502` 同上 —— **単一セグメントと同じ扱い**（移行前と同じ） |
+| `OPTIONS /xrpc/x` | `204` |
+| `GET /nope` | `404` `{"error":"Not Found","routes":["GET /","GET /health","POST /xrpc/:nsid"]}` |
+| `POST /health` | `405` |
+| `GET /_app/meta` | `404` —— 未 deploy だった `src/app.ts` の経路。持ち越していない |
 
-```javascript
-await recordNotam(e, { notamId: "A1", location: "RJTT", notamType: "RWY", effectiveFrom: "…" });
-await submitPirep(e, { pirepId: "", flightNo: "", location: "RJTT" });
-// → { status: "submitted",
-//     pirepUri: "at://did:web:air-ops.etzhayyim.com/com.etzhayyim.apps.airOps.pirep/pirep-",
-//     did: "did:web:air-ops.etzhayyim.com:pirep:", pirepId: "" }
-// listPireps(e).total === 1   — an anonymous PIREP, in the store, in the rollup
-```
+**実 env（wrangler.jsonc の 8 vars）に対する値の露出も、ここで測った:**
 
-Now submit one with **nothing** anchored:
+| 探した文字列 | ページ内の件数 |
+|---|---|
+| `APP_NANOID`（**キー名**） | 1 |
+| `a1r0ps01`（その**値**） | **0** |
+| `yoro`（`APP_UI_TYPE` の**値**） | **0** |
+| `class="dads-table"` | 1 |
+| `--color-primitive-blue`（stylesheet が実際に入っている） | **45** |
 
-```javascript
-await submitPirep(e, { pirepId: "", flightNo: "", location: "" });
-// → { status: "rejected", error: "notamLocationNotFound" }
-```
+`compatibility_flags`（`nodejs_compat` / `nodejs_als`）は SvelteKit の
+adapter-cloudflare 由来で、この bundle には要らない。**撤去は憶測ではなく
+この実測で確かめてから行った** —— 上の表は flags が無い設定で得たものである。
 
-Still rejected — but by the **foreign-key check two lines further down**, under a
-different error. So the guard's absence is invisible exactly when the location happens
-to be one an operator would actually use. A test that only asserted "empty input is
-rejected" would pass against the mutant and prove nothing; the missing test has to
-assert the **error code**, and cover a location that exists.
+（`rules` の CompiledWasm については wrangler が
+`Add \`fallthrough = true\`…` の警告を出すが、これは継承した設定で、
+`.wasm` はこの repo に 1 つも無い。移行の範囲外なので触っていない。）
 
-## §5 ⚠ The encrypted path has no duplicate check — and the whole family agrees
-
-M4 and M5 turn `encryptedWrite` into a plaintext `write` and die, so the E2E boundary
-itself is tested. What is not tested is what happens when two records land on the same
-key. The plaintext writers guard it; the encrypted writers do not:
-
-| path | writers | reads before writing |
-|---|---|---|
-| plaintext (`recordNotam`, `submitPirep`) | 2 | **2** |
-| E2E (`fileFlightPlan`, `createDispatchBrief`, `recordTechLog`, `orderFuel`) | 4 | **0** |
-
-File two different flight plans for the same flight and date:
-
-```javascript
-await fileFlightPlan(e, { flightNo:"NH001", depDate:"2026-06-03", origin:"RJTT", dest:"KSFO", captainDid:"did:web:capt.a" });
-await fileFlightPlan(e, { flightNo:"NH001", depDate:"2026-06-03", origin:"RJTT", dest:"KLAX", captainDid:"did:web:capt.b" });
-// both → { status: "filed", uri: "…/fpl-nh001-2026-06-03" }   (same uri, different keyId)
-// listFlightPlans(e).total === 1
-// getFlightPlan({flightNo:"NH001", depDate:"2026-06-03"}) → dest KLAX, captain capt.b
-```
-
-Both calls report `filed`. The first plan is gone. `MockEtzhayyim` documents this as its
-contract — *"Idempotent writes (same collection + rkey) overwrite the previous value"* —
-so the caller is told success twice and the store keeps one record.
-
-This is not local to `app-air-ops`. One pass over all nine siblings, splitting each
-`registry.ts` into top-level functions and asking whether an `alreadyExists` return
-appears **before** the write call:
+## 7. deploy（この walk ではやっていない）
 
 ```bash
-cd ~/github/com-junkawasaki/orgs/cloud-itonami && python3 - <<'PY'
-import re,glob,os
-for d in sorted(glob.glob('app-air-*')):
-    f=os.path.join(d,'kotoba','src','registry.ts')
-    if not os.path.exists(f): continue
-    parts=re.split(r'\n(?=(?:export )?async function )', open(f,encoding='utf-8').read())[1:]
-    e2e=e2eg=pt=ptg=0
-    for p in parts:
-        if 'encryptedWrite' in p:
-            e2e+=1; e2eg+= 'alreadyExists' in p[:p.index('encryptedWrite')]
-        elif re.search(r'\be\.write\(',p):
-            pt+=1;  ptg+= 'alreadyExists' in p[:re.search(r'\be\.write\(',p).start()]
-    print(f"{d:16} E2E {e2eg}/{e2e} guarded   plaintext {ptg}/{pt} guarded")
-PY
+cd "$REPO"
+npx wrangler deploy
 ```
 
-```
-app-air-cargo    E2E 0/3 guarded   plaintext 2/3 guarded
-app-air-crew     E2E 0/7 guarded   plaintext 1/1 guarded
-app-air-dcs      E2E 0/3 guarded   plaintext 2/5 guarded
-app-air-ffp      E2E 0/2 guarded   plaintext 1/2 guarded
-app-air-mro      E2E 0/3 guarded   plaintext 4/4 guarded
-app-air-ops      E2E 0/4 guarded   plaintext 2/2 guarded
-app-air-sched    E2E 0/0 guarded   plaintext 3/5 guarded
-app-air-sms      E2E 0/4 guarded   plaintext 4/4 guarded
-app-air-yield    E2E 0/3 guarded   plaintext 2/3 guarded
-                 ── 0 of 29 ──                21 of 29 ──
-```
-
-**Twenty-nine encrypted writers across nine domain vocabularies, none of them guarded;
-twenty-one of twenty-nine plaintext writers guarded.** The same authors, in the same
-files, checked one path and not the other — and a collision costs *more* on the
-encrypted side, because the plaintext side at least reports `alreadyExists` while the
-encrypted side reports `filed` and drops a record. Whether that asymmetry is deliberate
-(an OFP reissue legitimately replacing its predecessor) is not written down anywhere in
-these repositories; §9 records that as unresolved rather than as a bug.
-
-## §6 ⚠ `rkeyOf` collapses distinct identifiers, and the two paths fail differently
-
-`types.ts:392`:
-
-```typescript
-export function rkeyOf(prefix: string, id: string): string {
-  return `${prefix}-${id.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
-}
-```
-
-Every non-alphanumeric run becomes one `-`, so `A-0001`, `A/0001`, `A 0001` and
-`A_0001` are one key. Seven call sites use it (`registry.ts` lines 100, 124, 146, 202,
-254, 297, 346), covering every collection. The consequence differs by path.
-
-**Plaintext — wrong record returned.** The dedup guard turns the collision into a
-false identity:
-
-```javascript
-await recordNotam(e, { notamId:"A-0001", location:"RJTT", notamType:"RWY", … });
-await recordNotam(e, { notamId:"A/0001", location:"KSFO", notamType:"NAV", … });
-// second → { status: "alreadyExists", notamId: "A/0001", did: "…:notam:a-0001" }
-await getNotam(e, { notamId: "A/0001" });
-// → { notam: { notamId: "A-0001", location: "RJTT", notamType: "RWY", … } }
-```
-
-A dispatcher asking for NOTAM `A/0001` at KSFO is handed a runway notice for RJTT under
-someone else's id. Note also that the returned `did` is `…:notam:a-0001` while
-`notamDidFor("A/0001")` computes `…:notam:a/0001` — the DID helper only lowercases, so
-the DID namespace and the storage-key namespace are not in bijection.
-
-**Encrypted — record lost, lookup says `notFound`.** With no dedup guard (§5):
-
-```javascript
-await recordTechLog(e, { techLogId:"T-1", flightNo:"NH001", tailNumber:"JA801A", defectCode:"ATA34", … });
-await recordTechLog(e, { techLogId:"T/1", flightNo:"NH002", tailNumber:"JA802A", defectCode:"ATA21", … });
-await getTechLog(e, { techLogId: "T-1" });   // → { error: "notFound" }
-await getTechLog(e, { techLogId: "T/1" });   // → the JA802A record, at uri …/tlog-t-1
-```
-
-The ATA34 defect on JA801A is gone and its own identifier reports `notFound`.
-
-There is a third form specific to the composite keys. `fileFlightPlan` and
-`createDispatchBrief` join two fields with a bare `-` **before** normalising, so the
-separator is not distinguishable from data:
-
-```javascript
-await fileFlightPlan(e, { flightNo:"NH001-2026", depDate:"06-03", … });  // → fpl-nh001-2026-06-03
-await fileFlightPlan(e, { flightNo:"NH001",      depDate:"2026-06-03", … });  // → fpl-nh001-2026-06-03
-// listFlightPlans(e).total === 1
-```
-
-Two different flights, one surviving record, both calls reporting `filed`.
-
-No test in the suite exercises any of this, which is why §3's ten mutants cannot see it:
-mutation testing measures whether the tests catch changes to the code, not whether the
-code is right about inputs the tests never supply.
-
-## §7 ✅ What is actually deployed
-
-```bash
-grep '"main"' wrangler.jsonc
-#   "main": "svelte/.svelte-kit/cloudflare/_worker.js"
-```
-
-`main` is the SvelteKit build output. `src/app.ts` — 76 lines, the obvious entry point,
-opening with `// 8 methods: fileFlightPlan / createDispatchBrief / …`, serving `/health`
-and `/_app/meta`, gating on `NSID_PREFIX = "com.etzhayyim.apps.airOps."`, accepting GET
-and POST, and forwarding to `dispatcher.etzhayyim.com` — is **not deployed**. Build it
-and search the whole unit:
-
-```bash
-cd /tmp/ops-build/svelte && npm install --no-audit --no-fund && npm run build
-#   ✔ built in 2.78s
-find .svelte-kit/cloudflare -type f | wc -l          # 18 files, _worker.js is 4335 bytes
-grep -rl 'health'         .svelte-kit/ | wc -l       # 0
-grep -rl 'fileFlightPlan' .svelte-kit/ | wc -l       # 0
-```
-
-**A search that finds nothing is worthless until you show it can find something.**
-Positive controls in the same bundle:
-
-```bash
-grep -rl 'sveltekit-edge-bff'         .svelte-kit/ | wc -l   # 1
-grep -rl 'AGENTGATEWAY_MCP_ROUTER_URL' .svelte-kit/ | wc -l  # 1
-grep -rl 'mcp.etzhayyim.com'           .svelte-kit/ | wc -l  # 1
-grep -rl 'structuredContent'           .svelte-kit/ | wc -l  # 1
-```
-
-So `/health` genuinely is not there. With `not_found_handling: "none"` in
-`wrangler.jsonc`, a GET `/health` on the deployed worker is a 404 — a monitor pointed at
-it is watching a path that does not exist.
-
-The deployed handler is `svelte/src/routes/xrpc/[...path]/+server.ts`, ten lines. It
-exports **`POST` and `OPTIONS` only** — no GET, unlike `src/app.ts` — takes whatever
-NSID is in the path with **no prefix check**, and forwards it to
-`AGENTGATEWAY_MCP_ROUTER_URL` as a JSON-RPC `tools/call`. `app-air-mro` §3 covers what
-that means for the method list; the short version is that this repository is not where
-you learn what the app can do, and `APP_CAPABILITIES` is documentation rather than
-enforcement.
-
-## §8 ⚠ Nothing this app declares or calls resolves
-
-```bash
-for h in a1r0ps01.etzhayyim.com air-ops.etzhayyim.com mcp.etzhayyim.com dispatcher.etzhayyim.com etzhayyim.com; do
-  printf '%-28s %s\n' "$h" "$(dig +short "$h" | tr '\n' ' ')"
-done
-```
+**この walk では実行していない。** そして **route が指すホストは解決しない**:
 
 ```
-a1r0ps01.etzhayyim.com          (none)     ← declared route 1
-air-ops.etzhayyim.com           (none)     ← declared route 2
-mcp.etzhayyim.com               (none)     ← default upstream of the DEPLOYED handler
-dispatcher.etzhayyim.com        (none)     ← default upstream of src/app.ts
+a1r0ps01.etzhayyim.com          (none)     ← 宣言された route 1
+air-ops.etzhayyim.com           (none)     ← 宣言された route 2
+mcp.etzhayyim.com               (none)     ← /xrpc/:nsid の中継先
+dispatcher.etzhayyim.com        (none)     ← 未 deploy だった src/app.ts の中継先
 etzhayyim.com                   104.21.51.111 172.67.179.128
 ```
 
-The apex resolves and the zone is on Cloudflare (`everton`/`vivienne.ns.cloudflare.com`),
-so this is a real absence and not a broken resolver. `curl https://air-ops.etzhayyim.com/`
-returns nothing (`000`). Both declared routes are unrouted, and even if the worker were
-deployed, its default upstream has no address — every forwarded call would fail before
-reaching an MCP router.
+apex は解決し zone は Cloudflare 上（`everton` / `vivienne.ns.cloudflare.com`）
+なので、これは resolver の故障ではなく実在の不在である。deploy が成功しても誰も
+到達できない。中継先も同様なので、到達できたとしても `/xrpc/` は **502 を返す**
+（成功と同じ形で隠さない）。
 
-## §9 What could not be walked, and what is unresolved
+superproject の deploy guard は `origin/main` を含む checkout からの deploy しか
+許さない点も併せて注意。
 
-- **The real `@etzhayyim/sdk` was never loaded.** §2 substitutes the mock, which is
-  sound for the tests (the SDK import is type-only) but means every behaviour in §5 and
-  §6 is `MockEtzhayyim`'s documented same-key-overwrite semantics, not the substrate's.
-  Whether a real PDS overwrites, rejects, or versions a repeated rkey is **unverified
-  here**. The collisions themselves (§6) are pure-function facts about `rkeyOf` and hold
-  regardless.
-- **`npm run typecheck` was not run against the pinned SDK**, for the same reason.
-- **Whether E2E overwrite-without-warning is a bug or the intent** is not decided in
-  this document. A reissued OFP replacing its predecessor is plausible; four writers
-  behaving that way while two neighbours in the same file guard against it, with nothing
-  written down either way, is what §5 reports.
-- **No fix is proposed for M7.** This pass measured; adding the missing test is a change
-  to `kotoba/`, and this repository is a byte-exact extraction (§1) whose upstream is
-  `etzhayyim/root` — where the fix belongs is a question for the owner of that tree, not
-  for a doc.
-- **`MIGRATION-TODO.md`'s seven unticked boxes are not offered as findings.** That file
-  says so itself: the TRANSFORM classification came from the app's domain pattern, "not
-  on detected violations", and manual review is still required. What is certain is that
-  the review has not happened.
+## 8. ここに無いもの・walk していないもの
 
-## §10 What the maturity instrument sees here ✅
-
-```
-· orgs/cloud-itonami/app-air-ops  own=0.049  axis-docs=0bp → +2500bp
-    ⚠ README が .md ではないので docs の README 成分は 0（README.edn 等が 1 件）
-    ⚠ taxonomy に :repo/kind の行が無い → :default の重みで採点されている
-```
-
-Both warnings are about the instrument, not this repository. `README.edn` declares
-`:canonical-metadata :edn` — EDN is deliberately canonical here — while the score reads
-`README.md`; and with no row in `manifest/repo-taxonomy.edn` the repository is scored
-against a guessed weight profile, so its `own` is not comparable to one whose kind is
-known. Recorded in ADR-2608052000. Neither is closed by adding a second README, and
-adding one to move a number would be the water-weight this loop exists to refuse.
-
-## §11 Leave the checkout clean
-
-Everything above ran in `/tmp/ops-build`, `/tmp/ops-sdk` and a worktree. Nothing was
-written to the west checkout; confirm it:
-
-```bash
-git -c core.fsmonitor=false -C "$REPO" status --short   # expect: empty
-rm -rf /tmp/ops-build /tmp/ops-sdk /tmp/ops-registry.orig.ts /tmp/ops-types.orig.ts
-```
+- **`dispatcher.etzhayyim.com` への中継と `/_app/meta`** —— 移行前の `src/app.ts`
+  にあり、**どこにも deploy されていなかった**経路。宛先が NXDOMAIN なので
+  持ち越していない（README の「持ち越さなかった経路」）。
+- **`kotoba/` は移行していない**（消してもいない）。理由と測定は README の
+  「`kotoba/` は移していない。消してもいない」、層そのものの walk は
+  `docs/kotoba-layer-audit.md`。
+- **`kotoba/` の tests はこの walk では回していない。** 2026-08-16 に
+  `e0be46d` で回した結果（11 passed、mutant 10 中 1 生存）が audit にある。
+  移行は `kotoba/` に 1 バイトも触っていない（sha256 を検証器に固定）ので
+  結果は変わらないはずだが、**再実行はしていない**。
+- **`MIGRATION-TODO.md` の 7 項目の憲章適合レビュー**は未実施のまま。
+- **本番 deploy**（§7）。

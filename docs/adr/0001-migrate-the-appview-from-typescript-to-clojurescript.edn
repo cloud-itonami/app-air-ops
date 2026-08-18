@@ -1,0 +1,210 @@
+[{:db/id -1
+  :adr/id "app-air-ops-0001"
+  :adr/title "appview を TypeScript/Svelte から ClojureScript へ移す"
+  :adr/status "accepted"
+  :adr/date "2026-08-18"
+  :adr/doc_type "adr"
+  :adr/source-format "edn"
+  :adr/body "
+# ADR-0001: appview を TypeScript/Svelte から ClojureScript へ移す
+
+**Status**: accepted / **Date**: 2026-08-18 / **Deciders**: Jun Kawasaki
+
+## Context
+
+移行前の状態を測った（すべて 2026-08-18、tip 1cb3a1c）。
+
+1. **deploy される handler と、読み手が開くファイルが別だった。**
+   wrangler.jsonc の main は `svelte/.svelte-kit/cloudflare/_worker.js` を指すが、
+   これは SvelteKit のビルド出力で **この tree に 1 バイトも無い**
+   （`git ls-files 'svelte/.svelte-kit*'` が 0 件）。同じことが `assets.directory`
+   （`./svelte/.svelte-kit/cloudflare/client`）にも当てはまる。
+   一方 `src/app.ts` は 76 行、`// 8 methods: fileFlightPlan / …` で始まり
+   `/health` と `/_app/meta` を持ち、いかにも本体に読める。**どこからも
+   参照されていない** —— tree 全体の grep で、この名前に当たるのは
+   docs の散文 3 行だけだった。先行の監査（docs/kotoba-layer-audit.md S7）は
+   SvelteKit を実際にビルドして、bundle に `health` も `fileFlightPlan` も
+   0 件であることを、同じ bundle での陽性対照つきで確かめている。
+
+2. **公開ページが隣の設定と矛盾していた。** `svelte/src/routes/+page.svelte` は
+   `routeCount: 0` / `routes: []` / `vars: []` を literal で持っていた。
+   同じディレクトリの wrangler.jsonc は route 2・var 8 を宣言している。
+   ページは『No public route is declared next to this app surface.』と表示する。
+
+3. **`APP_FRAMEWORK` が `sveltekit-edge-bff` と名乗っていた。**
+
+この workspace の正本言語は cljs と kotoba である。superproject CLAUDE.md の
+runtime 順序は kotoba wasm > clojurewasm > ClojureScript > nbb で、TypeScript は
+そこに無い。
+
+## Decision
+
+**appview を ClojureScript に移し、appview の TypeScript と Svelte を撤去する。**
+
+    src/airops/route.cljc    判断（どの handler が答えるか・env の何を出すか）
+    src/airops/view.cljc     ページ（jp-go-dds の hiccup）
+    src/airops/worker.cljs   Request/Response に触る唯一の層
+            ↓ shadow-cljs :target :esm
+    dist/worker.js           wrangler.jsonc の main が指すもの
+
+先例は同じ org の app-ongakuka と cloud-itonami-marketplace-listing。入口を
+.kotoba ではなく cljs に置くのは ADR-2606290000 の判断で、kotoba の ingress
+capability が :native-aot / :wasm-aot とも pending だからである。判断を .cljc に
+切り出してあるのは、ブラウザもビルドも無しにテストするためであり、ingress が
+qualify した時に最初に .kotoba へ移る部分だからでもある。
+
+### 移したのは「deploy されていた振る舞い」である
+
+deploy されていたのは SvelteKit 側 —— `/`（ページ）、`POST /xrpc/[...path]`
+（`AGENTGATEWAY_MCP_ROUTER_URL` へ jsonrpc `tools/call` で中継し
+`result`/`structuredContent` を剥がす）、`OPTIONS`（204 preflight）。これを移した。
+
+`+server.ts` は **NSID の prefix を検査しない**。cljs 側でも検査しない ——
+`src/app.ts` は `com.etzhayyim.apps.airOps.` で gate していたが、それは deploy
+されていないファイルの振る舞いであり、持ち込めば移行ではなく方針変更になる。
+同じ理由で多段パス（`/xrpc/a/b`）も移行前どおり転送する。空の nsid だけが 400。
+
+### 足したもの（黙って足していない）
+
+`GET /health` は **追加**である。移行前に deploy されていた面には無く
+（bundle の grep で 0 件）、`src/app.ts` にはあったが deploy されていなかった。
+deploy された面が答えることを外から確かめられる surface が要るので足した。
+移植ではなく追加として記録する。
+
+### 持ち越さなかった経路
+
+`src/app.ts` にあってどこにも deploy されていなかったもののうち:
+
+- `dispatcher.etzhayyim.com` への中継 —— 宛先が **NXDOMAIN**（dig +short で無応答。
+  apex etzhayyim.com は 104.21.51.111 / 172.67.179.128 を返すので、これは
+  resolver の故障ではなく実在の不在）
+- `/_app/meta` —— 同じ未 deploy ファイルの surface
+
+**動かない経路を移植して『移行済み』と言わないため**である。
+
+### kotoba/ は移していない（消してもいない）
+
+この repo には appview ではない TypeScript がある。`kotoba/`（7 ファイル・980 行）は
+air-ops の domain library で、次の 3 点を測った上で**手を触れていない**:
+
+- **どの bundle にも入っていない** —— 移行前の SvelteKit bundle にも、移行後の
+  dist/worker.js にも `fileFlightPlan` / `recordNotam` / `rkeyOf` /
+  `encryptedWrite` は 0 件（同じ bundle で `dads-table` が 73 件という陽性対照つき）
+- **移行対象から参照されていない** —— tree 全体の grep で kotoba/ の外に参照は無い
+- **依存が解決する** —— pin された 2 つの git dep は
+  `git fetch <url> <sha>` がどちらも `type=commit` を返す
+  （`12314a0c…` = com-etzhayyim-sdk、`c857ff9b…` = com-etzhayyim-sdk-mock）
+
+**テンプレ的な『TypeScript を全部消す』で消せば、それは移行ではなく破壊である。**
+残し、README に測定つきで名指しし、**ファイル数と全バイトを検証器に固定した**ので
+黙って増減しない。移行するなら、それは別の決定であり、依存先に cljs の面が要る。
+
+### UI
+
+基盤は jp-go-digital-design-system（skill kotoba-uiux が定める新規 UI の base）。
+色・寸法は --hig-* トークン契約のみ、raw hex も px フォントサイズも無く、
+app 固有 CSS は 3 行。CSS は shadow.resource/inline で bundle に焼く。
+
+## 検証（この ADR を書いた時点で実際に通したもの）
+
+- **airops.route-test: 6 tests / 28 assertions、0 failures**（nbb、ビルド不要）
+- **ページ描画 → design-quality 100.00 / 100（gate 95）**。`--extra-axes` つき
+  12 軸でも 100.00
+- **scripts/verify-docs-claims.cljs: 18 claim すべて PASS、exit 0**
+- **shadow-cljs release worker: 55 files / 12 compiled / 0 warnings / 31.47s**、
+  dist/worker.js 245,878 バイト
+- **scripts/smoke-worker.cljs: 16 項目すべて PASS、exit 0**（ビルド済み bundle を
+  import して叩く。この repo で唯一 deploy される成果物に触る検査）
+- **workerd（`wrangler dev --local`）で全 route を実際に叩いた。** Node で import
+  する smoke より強い証拠である（実際の Workers ランタイムで動かしているため）。
+  `GET /` 200 text/html・`GET /health` 200・`POST /xrpc/` 400・
+  `POST /xrpc/com.…fetchNotam` 502（`MCP router unreachable`、URL つき）・
+  `POST /xrpc/a/b` **502 で単一セグメントと同一扱い**（移行前と同じ）・
+  `OPTIONS` 204・`GET /nope` 404・`POST /health` 405・`GET /_app/meta` 404。
+  実 env（wrangler.jsonc の 8 vars）に対して、`APP_NANOID`（キー）は 1 件、
+  `a1r0ps01`（その値）は **0 件**、`yoro`（APP_UI_TYPE の値）も **0 件**、
+  `--color-primitive-blue` は 45 件だった。
+  **`compatibility_flags`（nodejs_compat / nodejs_als）の撤去は、憶測ではなく
+  この実測で確かめてから行った** —— 上の結果は flags が無い設定で得たものである。
+
+### 検査が「落ちること」を実際に見た
+
+緑は、それが赤くなるところを見るまで検査ではない。
+
+| 壊したもの | 赤くなったもの |
+|---|---|
+| `env-var-keys` が keys でなく **vals** を返す | env-var-keys-drops-values（3 assertion） |
+| `/xrpc/a/b` を 1 セグメントに絞る | dispatch-xrpc |
+| ページが route 表でなく空リストを描く | page-shows-the-real-routes（2 assertion） |
+| worker の `route/dispatch` を存在しない var に改名 | **ビルドが exit 1**（下記） |
+| `(rc/inline \"jp_go_dds/dds.css\")` → `\"\"` | smoke の *stylesheet* 検査だけ（下記） |
+| worker が env の **値**をページに渡す（`(vals …)`）| smoke の value-exposure 2 本（ビルドし直して実測） |
+| `:warnings-as-errors` を `:build-options` へ移す | verify の warnings-as-errors-in-compiler-options |
+| 撤去した .ts を戻す / 別名の .ts を足す | removed-by-migration-absent / appview-ts-files |
+| kotoba/ にファイルを足す | kotoba-files |
+
+### ビルドが通ることは、それ自体では検査ではなかった
+
+shadow は未宣言・改名された var を **WARNING** として扱い **exit 0** する ——
+最初のリクエストで throw する bundle を書きながら『ビルド成功』と言う。
+つまり**落ちようがなかった**。`:compiler-options` に
+`:warnings-as-errors true` を入れ、この repo で実際に落として確かめた。
+
+キーは `:build-options` ではなく **`:compiler-options`** に置く。shadow が読むのは
+`[:compiler-options :warnings-as-errors]` で、置き場所を間違えると**黙って無視される**
+—— この option が防ぐはずの失敗（落ちようのない検査）そのものになる。だから
+検証器は EDN を**読んで**確かめる。grep では駄目である ——
+shadow-cljs.edn のコメントにも、検証器自身にもその文字列が入っているので、
+grep は必ず当たってしまう。
+
+### design system の検査は 2 本要る（1 本では落ちない）
+
+`dads-table` が在ることを 1 本で見る形は**落ちない検査**だった —— それは view が
+出力する markup であって、CSS が 1 バイトも入っていないページにも現れる。
+このページで実測:
+
+| 探す文字列 | CSS 込み | CSS 無し |
+|---|---|---|
+| `dads-table` | 74 | **6**（0 にならない） |
+| `class=\"dads-table\"` | 1 | **1** |
+| `--color-primitive-blue` | 45 | **0** |
+| `--hig-color-secondary-label` | 3 | **3**（app-css が markup に出すので印にならない） |
+
+だから 2 本に割った。**component を使ったか**（`class=\"dads-table\"`）と、
+**stylesheet が実際に入ったか**（`--color-primitive-blue`）は別の主張である。
+
+**design-quality のスコアはこの区別をしない。** デザインシステムを完全に外した
+ページ（css \"\"）を同じ CLI に掛けると **96.63 で PASS する**（gate 95）。
+CLI 自身が『axes scored: 10 … A pass says nothing about an axis that was not
+applied.』と出力に書く。「CSS が実際に入っている」と言えるのは smoke の 2 本目だけ。
+
+### 値の露出は 2 つの印で見る
+
+ページは env の**キー名**を出すが値は出さない —— **中継先を除いて**。
+`AGENTGATEWAY_MCP_ROUTER_URL` の値だけは、どこへ中継するかを運用者が見る必要が
+あるので意図的に表示する。だから検査は 2 本: 出てはいけない値（sentinel）が
+無いこと、**そして**出るべき値（中継先）が在ること。片方だけだと
+「全部隠す」実装も「全部出す」実装も通る。
+
+この判断は view ではなく `route/env-var-keys` に置いた。view は元から値を
+受け取らないので、**view に sentinel を当てる unit test は構造的に落ちない**
+（実際に書きかけて気づいた）。決定を .cljc に出したことで、`(vals env)` に
+変えた瞬間に unit test が赤くなる。
+
+## Consequences
+
+- appview の TypeScript は 0 本、正本言語が 4 本になった（移行前は 3 対 0）。
+  この 2 つは検証器の claim なので、TS が戻れば落ちる —— 撤去した 9 パスに戻る
+  場合と、別名で入る場合を別々の claim が捕まえる。
+- **`kotoba/` の TypeScript 5 本 / 7 ファイルはそのまま残っている。**
+  これは移行の失敗ではなく、範囲の判断である（上記）。数は固定した。
+- 継承した 12 ファイル（45,457 バイト）は 1 バイトも変わっていない
+  （sha256 を検証器に固定）。wrangler.jsonc と docs/operator-quickstart.md だけは
+  意図的に変更し、内容で検査する。
+- **ホストは相変わらず NXDOMAIN である。移行はそれを直さない。**
+  `a1r0ps01.etzhayyim.com` / `air-ops.etzhayyim.com`（deploy 先）も
+  `mcp.etzhayyim.com`（中継先）も解決しない。deploy するか retire するかは
+  別の決定。
+- `MIGRATION-TODO.md` の 7 項目（憲章適合レビュー）は未着手のまま。移行はそれも
+  直さない。
+"}]
