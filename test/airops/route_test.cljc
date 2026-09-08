@@ -1,6 +1,6 @@
 (ns airops.route-test
   (:require [clojure.test :refer [deftest is testing]]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [airops.route :as route]
             [airops.view :as view]))
 
