@@ -33,7 +33,7 @@
 
 3. **`APP_FRAMEWORK` が `sveltekit-edge-bff` と名乗っていた。**
 
-この workspace の正本言語は cljs と kotoba である。superproject CLAUDE.md の
+この workspace の正本言語は cljs と kotoba である。superproject AGENTS.md の
 runtime 順序は kotoba wasm > clojurewasm > ClojureScript > nbb で、TypeScript は
 そこに無い。
 
