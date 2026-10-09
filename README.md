@@ -46,14 +46,39 @@ route 表を渡す側が持ち、ページは描くだけなので、両者が�
 `/xrpc/` は移行前と同じく **NSID の prefix を検査せず、多段パスも転送する** ——
 絞るのは移行ではなく方針変更なので、この commit ではやらない。
 
-## いま在るもの — 26 ファイル
+## Static edition (IPFS)
+
+Worker の `GET /` はどの request にも同じ文書を返すので、それを**ビルド時に
+1 度描いた静的版**を IPFS に置く。正規の所在は IPNS 名（`ipns://k51…` /
+`{k51}.ipns` の gateway origin）で、DNS の名前はその別名である。**Worker 版は
+並行して deploy されたままで、その描画は 1 byte も変わらない**（`:static?` が
+無ければ従来の分岐をそのまま通る）。
+
+静的版には Worker が居ないので、ページは `/health`・`/xrpc/:nsid`・中継先・
+env のキーを**出さない**。route 表は `:route/kind :page` の行だけを描き、XRPC の
+中継は Worker 版にだけあると書く。`wrangler.jsonc` は**ビルド時に読み**、そこに宣言された var のキーが 1 つも出ていないことを確かめる。
+
+```bash
+K=~/github/com-junkawasaki/orgs/kotoba-lang
+kbb --backend sci \
+  --classpath "$K/jp-go-digital-design-system/src:$K/html/src:$K/css/src" \
+  scripts/render-static.kotoba .
+# => WROTE  dist/static/index.html   (dist/ は .gitignore 済み)
+```
+
+出力は決定的である（時刻を入れない）。2 回描いて sha256 が一致することを確認
+してから publish する。描いたものに `/xrpc`・`/health`・中継先・wrangler の
+var のキーが 1 つでも含まれていれば、書かずに exit 1 で止まる。
+
+## いま在るもの — 28 ファイル
 
 | 面 | ファイル |
 |---|---|
 | 判断・描画・edge | `src/airops/{route.cljc, view.cljc, worker.cljs}` |
-| テスト | `test/airops/route_test.cljc`（6 tests / 28 assertions） |
+| テスト | `test/airops/route_test.cljc`（8 tests / 51 assertions） |
 | ビルド | `deps.edn` / `shadow-cljs.edn` |
 | gate | `scripts/{smoke-worker.cljs, verify-docs-claims.cljs}` |
+| 静的版のビルド | `scripts/render-static.kotoba` |
 | Worker 設定 | `wrangler.jsonc` |
 | actor 記述子 | `kotodama.jsonld` |
 | **domain library（移行対象外）** | **`kotoba/` 7 ファイル** —— 下記 |
