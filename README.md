@@ -48,6 +48,8 @@ route 表を渡す側が持ち、ページは描くだけなので、両者が�
 
 ## Static edition (IPFS)
 
+Published name: `ipns://k51qzi5uqu5dhvkx7w6qpdodfyrr2q8pfzpn7xi1j1dozf9tngnkjfyjm6xz3r` (recorded with the site CID in `kotoba.app.edn`). Public HTTPS entrance: `https://k51qzi5uqu5dhvkx7w6qpdodfyrr2q8pfzpn7xi1j1dozf9tngnkjfyjm6xz3r.ipns.220-146-170-114.sslip.io/`.
+
 Worker の `GET /` はどの request にも同じ文書を返すので、それを**ビルド時に
 1 度描いた静的版**を IPFS に置く。正規の所在は IPNS 名（`ipns://k51…` /
 `{k51}.ipns` の gateway origin）で、DNS の名前はその別名である。**Worker 版は
@@ -70,7 +72,7 @@ kbb --backend sci \
 してから publish する。描いたものに `/xrpc`・`/health`・中継先・wrangler の
 var のキーが 1 つでも含まれていれば、書かずに exit 1 で止まる。
 
-## いま在るもの — 28 ファイル
+## いま在るもの — 29 ファイル
 
 | 面 | ファイル |
 |---|---|
